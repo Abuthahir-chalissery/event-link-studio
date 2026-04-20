@@ -14,16 +14,177 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      events: {
+        Row: {
+          allow_downloads: boolean
+          cover_path: string | null
+          created_at: string
+          description: string | null
+          expires_at: string | null
+          id: string
+          name: string
+          owner_id: string
+          password_hash: string | null
+          share_slug: string
+          updated_at: string
+        }
+        Insert: {
+          allow_downloads?: boolean
+          cover_path?: string | null
+          created_at?: string
+          description?: string | null
+          expires_at?: string | null
+          id?: string
+          name: string
+          owner_id: string
+          password_hash?: string | null
+          share_slug?: string
+          updated_at?: string
+        }
+        Update: {
+          allow_downloads?: boolean
+          cover_path?: string | null
+          created_at?: string
+          description?: string | null
+          expires_at?: string | null
+          id?: string
+          name?: string
+          owner_id?: string
+          password_hash?: string | null
+          share_slug?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      favorites: {
+        Row: {
+          client_token: string
+          created_at: string
+          event_id: string
+          id: string
+          media_id: string
+        }
+        Insert: {
+          client_token: string
+          created_at?: string
+          event_id: string
+          id?: string
+          media_id: string
+        }
+        Update: {
+          client_token?: string
+          created_at?: string
+          event_id?: string
+          id?: string
+          media_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "favorites_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "favorites_media_id_fkey"
+            columns: ["media_id"]
+            isOneToOne: false
+            referencedRelation: "media"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      media: {
+        Row: {
+          created_at: string
+          duration_seconds: number | null
+          event_id: string
+          filename: string
+          height: number | null
+          id: string
+          size_bytes: number | null
+          sort_order: number
+          storage_path: string
+          type: Database["public"]["Enums"]["media_type"]
+          width: number | null
+        }
+        Insert: {
+          created_at?: string
+          duration_seconds?: number | null
+          event_id: string
+          filename: string
+          height?: number | null
+          id?: string
+          size_bytes?: number | null
+          sort_order?: number
+          storage_path: string
+          type: Database["public"]["Enums"]["media_type"]
+          width?: number | null
+        }
+        Update: {
+          created_at?: string
+          duration_seconds?: number | null
+          event_id?: string
+          filename?: string
+          height?: number | null
+          id?: string
+          size_bytes?: number | null
+          sort_order?: number
+          storage_path?: string
+          type?: Database["public"]["Enums"]["media_type"]
+          width?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "media_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          display_name: string | null
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          id: string
+          updated_at?: string
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      set_event_password: {
+        Args: { _event_id: string; _password: string }
+        Returns: undefined
+      }
+      verify_event_password: {
+        Args: { _password: string; _share_slug: string }
+        Returns: boolean
+      }
     }
     Enums: {
-      [_ in never]: never
+      media_type: "image" | "video"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +311,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      media_type: ["image", "video"],
+    },
   },
 } as const
