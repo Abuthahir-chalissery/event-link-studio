@@ -29,7 +29,7 @@ export default function Auth() {
     setLoading(true);
     try {
       if (mode === "signup") {
-        const { error } = await supabase.auth.signUp({
+        const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: {
@@ -38,6 +38,18 @@ export default function Auth() {
           },
         });
         if (error) throw error;
+        // If email confirmation is off, session is returned directly.
+        // Otherwise, sign in immediately so the user lands in the dashboard.
+        if (!data.session) {
+          const { error: signInErr } = await supabase.auth.signInWithPassword({ email, password });
+          if (signInErr) {
+            toast.success("Account created", {
+              description: "Please check your email to confirm, then sign in.",
+            });
+            setMode("signin");
+            return;
+          }
+        }
         toast.success("Welcome to Lumen", { description: "Account created." });
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
