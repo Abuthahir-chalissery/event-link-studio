@@ -14,10 +14,20 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { AppHeader } from "@/components/AppHeader";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
-import { Plus, Calendar, Image as ImageIcon, Lock, Link2 } from "lucide-react";
+import { Plus, Calendar, Image as ImageIcon, Lock, Trash2 } from "lucide-react";
 import { publicUrl } from "@/lib/media";
 import { formatDistanceToNow } from "date-fns";
 
@@ -37,8 +47,9 @@ export default function Dashboard() {
   const [events, setEvents] = useState<EventRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
+  const [toDelete, setToDelete] = useState<EventRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
-  // form state
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [password, setPassword] = useState("");
@@ -101,6 +112,31 @@ export default function Dashboard() {
       toast.error(err instanceof Error ? err.message : "Failed to create event");
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!toDelete) return;
+    setDeleting(true);
+    try {
+      // Remove storage files for the event
+      const { data: list } = await supabase.storage
+        .from("event-media")
+        .list(toDelete.id, { limit: 1000 });
+      if (list && list.length > 0) {
+        const paths = list.map((f) => `${toDelete.id}/${f.name}`);
+        await supabase.storage.from("event-media").remove(paths);
+      }
+      // Delete the event row (media + favorites cascade)
+      const { error } = await supabase.from("events").delete().eq("id", toDelete.id);
+      if (error) throw error;
+      toast.success("Event deleted");
+      setToDelete(null);
+      await load();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete event");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -190,49 +226,83 @@ export default function Dashboard() {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {events.map((ev, i) => (
-              <Link
-                to={`/events/${ev.id}`}
+              <div
                 key={ev.id}
-                className="group block rounded-lg overflow-hidden bg-card border border-border shadow-card hover:shadow-elegant hover:border-primary/40 transition-all duration-500 animate-fade-up"
+                className="group relative rounded-lg overflow-hidden bg-card border border-border shadow-card hover:shadow-elegant hover:border-primary/40 transition-all duration-500 animate-fade-up"
                 style={{ animationDelay: `${i * 60}ms` }}
               >
-                <div className="aspect-[4/3] relative overflow-hidden bg-muted">
-                  {ev.cover_path ? (
-                    <img
-                      src={publicUrl(ev.cover_path)}
-                      alt={ev.name}
-                      className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
-                      loading="lazy"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-muted-foreground/40">
-                      <ImageIcon className="h-12 w-12" />
-                    </div>
-                  )}
-                  <div className="absolute inset-0 bg-cinematic" />
-                  {ev.password_hash && (
-                    <div className="absolute top-3 right-3 glass rounded-full p-1.5 border border-border">
-                      <Lock className="h-3.5 w-3.5 text-primary" />
-                    </div>
-                  )}
-                </div>
-                <div className="p-5">
-                  <h3 className="font-display text-2xl truncate">{ev.name}</h3>
-                  <div className="flex items-center justify-between text-xs text-muted-foreground mt-2">
-                    <span className="flex items-center gap-1.5">
-                      <Calendar className="h-3 w-3" />
-                      {formatDistanceToNow(new Date(ev.created_at), { addSuffix: true })}
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <ImageIcon className="h-3 w-3" />
-                      {ev.media_count} item{ev.media_count === 1 ? "" : "s"}
-                    </span>
+                <Link to={`/events/${ev.id}`} className="block">
+                  <div className="aspect-[4/3] relative overflow-hidden bg-muted">
+                    {ev.cover_path ? (
+                      <img
+                        src={publicUrl(ev.cover_path)}
+                        alt={ev.name}
+                        className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-muted-foreground/40">
+                        <ImageIcon className="h-12 w-12" />
+                      </div>
+                    )}
+                    <div className="absolute inset-0 bg-cinematic" />
+                    {ev.password_hash && (
+                      <div className="absolute top-3 right-3 glass rounded-full p-1.5 border border-border">
+                        <Lock className="h-3.5 w-3.5 text-primary" />
+                      </div>
+                    )}
                   </div>
-                </div>
-              </Link>
+                  <div className="p-5">
+                    <h3 className="font-display text-2xl truncate">{ev.name}</h3>
+                    <div className="flex items-center justify-between text-xs text-muted-foreground mt-2">
+                      <span className="flex items-center gap-1.5">
+                        <Calendar className="h-3 w-3" />
+                        {formatDistanceToNow(new Date(ev.created_at), { addSuffix: true })}
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <ImageIcon className="h-3 w-3" />
+                        {ev.media_count} item{ev.media_count === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                  </div>
+                </Link>
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setToDelete(ev);
+                  }}
+                  className="absolute top-3 left-3 p-2 rounded-full bg-background/80 backdrop-blur opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive hover:text-destructive-foreground"
+                  aria-label="Delete event"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
             ))}
           </div>
         )}
+
+        <AlertDialog open={!!toDelete} onOpenChange={(o) => !o && setToDelete(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle className="font-display text-2xl">Delete this event?</AlertDialogTitle>
+              <AlertDialogDescription>
+                <strong className="text-foreground">{toDelete?.name}</strong> and all of its photos and videos
+                will be permanently removed. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleDelete}
+                disabled={deleting}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {deleting ? "Deleting…" : "Delete forever"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </main>
     </div>
   );

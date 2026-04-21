@@ -17,6 +17,7 @@ import {
   Image as ImageIcon,
   Film,
   Check,
+  Sparkles,
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { publicUrl, thumbUrl, inferMediaType, getImageDimensions } from "@/lib/media";
@@ -44,13 +45,22 @@ interface MediaRow {
   filename: string;
   width: number | null;
   height: number | null;
+  face_descriptors: { description: string }[] | null;
 }
 
-interface UploadItem {
-  id: string;
-  name: string;
-  progress: number;
-  status: "pending" | "uploading" | "done" | "error";
+const MAX_PARALLEL = 6;
+
+async function pool<T, R>(items: T[], limit: number, worker: (item: T, idx: number) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let i = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const myIdx = i++;
+      results[myIdx] = await worker(items[myIdx], myIdx);
+    }
+  });
+  await Promise.all(runners);
+  return results;
 }
 
 export default function EventDetail() {
@@ -60,11 +70,17 @@ export default function EventDetail() {
   const [event, setEvent] = useState<EventRow | null>(null);
   const [media, setMedia] = useState<MediaRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const [uploadState, setUploadState] = useState<{
+    total: number;
+    done: number;
+    failed: number;
+    active: boolean;
+  }>({ total: 0, done: 0, failed: 0, active: false });
   const [pwOpen, setPwOpen] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [savingPw, setSavingPw] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const load = async () => {
@@ -83,10 +99,10 @@ export default function EventDetail() {
     setEvent(ev);
     const { data: m } = await supabase
       .from("media")
-      .select("id, storage_path, type, filename, width, height")
+      .select("id, storage_path, type, filename, width, height, face_descriptors")
       .eq("event_id", id)
       .order("created_at", { ascending: false });
-    setMedia((m ?? []) as MediaRow[]);
+    setMedia((m ?? []) as unknown as MediaRow[]);
     setLoading(false);
   };
 
@@ -106,73 +122,61 @@ export default function EventDetail() {
   };
 
   const onFiles = async (files: FileList | null) => {
-    if (!files || !event || !user) return;
-    const items: UploadItem[] = Array.from(files).map((f) => ({
-      id: `${Date.now()}-${f.name}-${Math.random()}`,
-      name: f.name,
-      progress: 0,
-      status: "pending",
-    }));
-    setUploads((u) => [...items, ...u]);
+    if (!files || !event || !user || files.length === 0) return;
+    const fileArr = Array.from(files);
+    setUploadState({ total: fileArr.length, done: 0, failed: 0, active: true });
 
     let firstCoverPath: string | null = null;
 
-    await Promise.all(
-      Array.from(files).map(async (file, idx) => {
-        const item = items[idx];
-        try {
-          setUploads((u) => u.map((x) => (x.id === item.id ? { ...x, status: "uploading", progress: 5 } : x)));
-          const ext = file.name.split(".").pop() || "bin";
-          const path = `${event.id}/${crypto.randomUUID()}.${ext}`;
-          const type = inferMediaType(file);
+    await pool(fileArr, MAX_PARALLEL, async (file) => {
+      try {
+        const ext = file.name.split(".").pop() || "bin";
+        const path = `${event.id}/${crypto.randomUUID()}.${ext}`;
+        const type = inferMediaType(file);
 
-          const { error: upErr } = await supabase.storage
-            .from("event-media")
-            .upload(path, file, {
-              cacheControl: "3600",
-              upsert: false,
-              contentType: file.type,
-            });
-          if (upErr) throw upErr;
-
-          setUploads((u) => u.map((x) => (x.id === item.id ? { ...x, progress: 70 } : x)));
-
-          let width: number | null = null;
-          let height: number | null = null;
-          if (type === "image") {
-            const dims = await getImageDimensions(file);
-            width = dims.width || null;
-            height = dims.height || null;
-          }
-
-          const { error: insErr } = await supabase.from("media").insert({
-            event_id: event.id,
-            storage_path: path,
-            type,
-            filename: file.name,
-            size_bytes: file.size,
-            width,
-            height,
+        const { error: upErr } = await supabase.storage
+          .from("event-media")
+          .upload(path, file, {
+            cacheControl: "3600",
+            upsert: false,
+            contentType: file.type,
           });
-          if (insErr) throw insErr;
+        if (upErr) throw upErr;
 
-          if (!firstCoverPath && type === "image") firstCoverPath = path;
-
-          setUploads((u) => u.map((x) => (x.id === item.id ? { ...x, status: "done", progress: 100 } : x)));
-        } catch (err: unknown) {
-          console.error(err);
-          setUploads((u) => u.map((x) => (x.id === item.id ? { ...x, status: "error", progress: 100 } : x)));
+        let width: number | null = null;
+        let height: number | null = null;
+        if (type === "image") {
+          const dims = await getImageDimensions(file);
+          width = dims.width || null;
+          height = dims.height || null;
         }
-      })
-    );
 
-    // Set cover if not already
+        const { error: insErr } = await supabase.from("media").insert({
+          event_id: event.id,
+          storage_path: path,
+          type,
+          filename: file.name,
+          size_bytes: file.size,
+          width,
+          height,
+        });
+        if (insErr) throw insErr;
+
+        if (!firstCoverPath && type === "image") firstCoverPath = path;
+
+        setUploadState((s) => ({ ...s, done: s.done + 1 }));
+      } catch (err: unknown) {
+        console.error(err);
+        setUploadState((s) => ({ ...s, failed: s.failed + 1 }));
+      }
+    });
+
     if (event && !media.length && firstCoverPath) {
       await supabase.from("events").update({ cover_path: firstCoverPath }).eq("id", event.id);
     }
 
     await load();
-    setTimeout(() => setUploads((u) => u.filter((x) => x.status !== "done")), 1500);
+    setTimeout(() => setUploadState((s) => ({ ...s, active: false })), 800);
   };
 
   const handleSavePassword = async () => {
@@ -201,6 +205,39 @@ export default function EventDetail() {
     await load();
   };
 
+  const analyzeFaces = async () => {
+    if (!event) return;
+    const targets = media.filter((m) => m.type === "image" && !m.face_descriptors);
+    if (targets.length === 0) {
+      toast.info("All photos already analyzed");
+      return;
+    }
+    setAnalyzing(true);
+    toast.message(`Analyzing ${targets.length} photos…`, { description: "This runs in the background." });
+
+    let ok = 0;
+    let fail = 0;
+    await pool(targets, 3, async (m) => {
+      try {
+        const { data, error } = await supabase.functions.invoke("face-match", {
+          body: { action: "describe", imageUrl: thumbUrl(m.storage_path, 800) },
+        });
+        if (error) throw error;
+        await supabase
+          .from("media")
+          .update({ face_descriptors: data.faces ?? [] })
+          .eq("id", m.id);
+        ok++;
+      } catch (e) {
+        console.error("describe failed", e);
+        fail++;
+      }
+    });
+    setAnalyzing(false);
+    toast.success(`Analyzed ${ok} photo${ok === 1 ? "" : "s"}${fail ? ` · ${fail} failed` : ""}`);
+    await load();
+  };
+
   if (loading || !event) {
     return (
       <div className="min-h-screen">
@@ -209,6 +246,13 @@ export default function EventDetail() {
       </div>
     );
   }
+
+  const analyzedCount = media.filter((m) => m.type === "image" && m.face_descriptors).length;
+  const imageCount = media.filter((m) => m.type === "image").length;
+
+  const uploadPct = uploadState.total
+    ? Math.round(((uploadState.done + uploadState.failed) / uploadState.total) * 100)
+    : 0;
 
   return (
     <div className="min-h-screen">
@@ -254,6 +298,25 @@ export default function EventDetail() {
           )}
         </div>
 
+        {/* Face analysis bar */}
+        {imageCount > 0 && (
+          <div className="glass border border-border rounded-md px-4 py-3 mb-6 flex items-center gap-3 text-sm">
+            <Sparkles className="h-4 w-4 text-primary shrink-0" />
+            <span className="text-muted-foreground">
+              Face search ready for {analyzedCount} / {imageCount} photos
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-auto"
+              onClick={analyzeFaces}
+              disabled={analyzing || analyzedCount === imageCount}
+            >
+              {analyzing ? "Analyzing…" : analyzedCount === imageCount ? "All set" : "Analyze faces"}
+            </Button>
+          </div>
+        )}
+
         {/* Uploader */}
         <div
           onDragOver={(e) => e.preventDefault()}
@@ -261,7 +324,7 @@ export default function EventDetail() {
             e.preventDefault();
             onFiles(e.dataTransfer.files);
           }}
-          className="border-2 border-dashed border-border rounded-lg p-10 text-center mb-10 hover:border-primary/50 transition-colors cursor-pointer"
+          className="border-2 border-dashed border-border rounded-lg p-10 text-center mb-6 hover:border-primary/50 transition-colors cursor-pointer"
           onClick={() => inputRef.current?.click()}
         >
           <input
@@ -277,20 +340,19 @@ export default function EventDetail() {
           <p className="text-sm text-muted-foreground mt-1">or click to browse · multiple files supported</p>
         </div>
 
-        {/* Upload progress */}
-        {uploads.length > 0 && (
-          <div className="space-y-2 mb-8">
-            {uploads.map((u) => (
-              <div key={u.id} className="bg-card border border-border rounded-md p-3">
-                <div className="flex items-center justify-between text-sm mb-2">
-                  <span className="truncate mr-3">{u.name}</span>
-                  <span className={u.status === "error" ? "text-destructive" : "text-muted-foreground"}>
-                    {u.status === "done" ? "Done" : u.status === "error" ? "Failed" : `${u.progress}%`}
-                  </span>
-                </div>
-                <Progress value={u.progress} className="h-1" />
-              </div>
-            ))}
+        {/* Single aggregated upload progress */}
+        {uploadState.active && (
+          <div className="bg-card border border-border rounded-md p-4 mb-8 animate-fade-in">
+            <div className="flex items-center justify-between text-sm mb-2">
+              <span>
+                Uploading {uploadState.done + uploadState.failed} of {uploadState.total}
+                {uploadState.failed > 0 && (
+                  <span className="text-destructive"> · {uploadState.failed} failed</span>
+                )}
+              </span>
+              <span className="text-muted-foreground">{uploadPct}%</span>
+            </div>
+            <Progress value={uploadPct} className="h-1.5" />
           </div>
         )}
 
