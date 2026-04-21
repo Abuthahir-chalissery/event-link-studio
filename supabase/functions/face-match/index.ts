@@ -7,9 +7,9 @@ import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 const GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
 
-// Use the strongest vision model we have access to for accuracy.
+// Use the strongest vision model for description; balanced model for matching.
 const VISION_MODEL = "google/gemini-2.5-pro";
-const MATCH_MODEL = "google/gemini-2.5-pro";
+const MATCH_MODEL = "google/gemini-2.5-flash";
 
 interface DescribeBody {
   action: "describe";
