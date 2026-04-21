@@ -100,6 +100,7 @@ export type Database = {
           created_at: string
           duration_seconds: number | null
           event_id: string
+          face_descriptors: Json | null
           filename: string
           height: number | null
           id: string
@@ -113,6 +114,7 @@ export type Database = {
           created_at?: string
           duration_seconds?: number | null
           event_id: string
+          face_descriptors?: Json | null
           filename: string
           height?: number | null
           id?: string
@@ -126,6 +128,7 @@ export type Database = {
           created_at?: string
           duration_seconds?: number | null
           event_id?: string
+          face_descriptors?: Json | null
           filename?: string
           height?: number | null
           id?: string
