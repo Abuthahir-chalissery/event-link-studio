@@ -1,1 +1,4 @@
 project_id = "btygjlgkhgjffiqulpre"
+
+[functions.face-match]
+verify_jwt = false
