@@ -542,20 +542,22 @@ export default function Gallery() {
               <ChevronRight className="h-6 w-6" />
             </button>
           )}
-          <div className="max-w-[92vw] max-h-[90vh] select-none">
+          <div className="max-w-[92vw] max-h-[90vh] select-none animate-scale-in">
             {visible[lightboxIdx].type === "image" ? (
               <img
+                key={visible[lightboxIdx].id}
                 src={publicUrl(visible[lightboxIdx].storage_path)}
                 alt={visible[lightboxIdx].filename}
                 draggable={false}
-                className="max-w-[92vw] max-h-[90vh] object-contain animate-fade-in"
+                className="max-w-[92vw] max-h-[90vh] object-contain animate-fade-in shadow-elegant rounded-md"
               />
             ) : (
               <video
+                key={visible[lightboxIdx].id}
                 src={publicUrl(visible[lightboxIdx].storage_path)}
                 controls
                 autoPlay
-                className="max-w-[92vw] max-h-[90vh]"
+                className="max-w-[92vw] max-h-[90vh] rounded-md shadow-elegant"
               />
             )}
           </div>
