@@ -1,11 +1,15 @@
 // Face-matching edge function using Lovable AI (Gemini vision).
 // Two actions:
-//  - "describe": given a photo URL, return a short structured face description
+//  - "describe": given a photo URL, return a structured face description per person
 //  - "match":    given a selfie URL + a list of photo descriptions, return matching IDs
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 
 const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 const GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
+
+// Use the strongest vision model for description; balanced model for matching.
+const VISION_MODEL = "google/gemini-2.5-pro";
+const MATCH_MODEL = "google/gemini-2.5-flash";
 
 interface DescribeBody {
   action: "describe";
@@ -18,7 +22,7 @@ interface MatchBody {
 }
 type Body = DescribeBody | MatchBody;
 
-async function callGemini(messages: unknown[], tools?: unknown[], toolChoice?: unknown) {
+async function callGemini(model: string, messages: unknown[], tools?: unknown[], toolChoice?: unknown) {
   const res = await fetch(GATEWAY, {
     method: "POST",
     headers: {
@@ -26,7 +30,7 @@ async function callGemini(messages: unknown[], tools?: unknown[], toolChoice?: u
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "google/gemini-2.5-flash",
+      model,
       messages,
       ...(tools ? { tools, tool_choice: toolChoice } : {}),
     }),
@@ -37,6 +41,11 @@ async function callGemini(messages: unknown[], tools?: unknown[], toolChoice?: u
   }
   return await res.json();
 }
+
+const FACE_ATTRIBUTES_PROMPT =
+  "For each visible human face (even partially visible, side profile, or in the background), extract these attributes precisely. Be thorough — do NOT skip background people. " +
+  "Attributes: gender_impression, age_range (e.g. '20-30'), skin_tone (very_light/light/medium/tan/brown/dark), hair_color, hair_length (bald/short/medium/long), hair_style (straight/wavy/curly/coily/tied/braided), facial_hair (none/stubble/mustache/beard/goatee), glasses (none/clear/sunglasses), distinguishing_features (scars, moles, makeup, tattoos, piercings — short list), accessories (hat/headband/earrings/necklace), clothing_color, clothing_type, pose (front/side/back/three_quarter). " +
+  "Also include a short free_text summary that captures what makes this person visually unique.";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -51,16 +60,17 @@ Deno.serve(async (req) => {
 
     if (body.action === "describe") {
       const data = await callGemini(
+        VISION_MODEL,
         [
           {
             role: "system",
             content:
-              "You analyse photos. For every visible human face, write a short, distinctive description: gender impression, approximate age range, skin tone, hair (length/color/style), facial hair, glasses, notable accessories, and visible clothing color. If no face, say 'no_face'.",
+              "You are a meticulous face cataloguer for a photo gallery. You extract visual attributes for EVERY face you can see, including small/background faces. Never invent details — only report what is visible. If no human face is visible, return an empty list.",
           },
           {
             role: "user",
             content: [
-              { type: "text", text: "Describe each face in this photo as a JSON array under key 'faces'. Each item: {description: string}. If no face: {faces: []}." },
+              { type: "text", text: FACE_ATTRIBUTES_PROMPT },
               { type: "image_url", image_url: { url: body.imageUrl } },
             ],
           },
@@ -70,7 +80,7 @@ Deno.serve(async (req) => {
             type: "function",
             function: {
               name: "report_faces",
-              description: "Report the faces visible in the photo",
+              description: "Report every visible face in the photo with structured attributes",
               parameters: {
                 type: "object",
                 properties: {
@@ -78,7 +88,22 @@ Deno.serve(async (req) => {
                     type: "array",
                     items: {
                       type: "object",
-                      properties: { description: { type: "string" } },
+                      properties: {
+                        gender_impression: { type: "string" },
+                        age_range: { type: "string" },
+                        skin_tone: { type: "string" },
+                        hair_color: { type: "string" },
+                        hair_length: { type: "string" },
+                        hair_style: { type: "string" },
+                        facial_hair: { type: "string" },
+                        glasses: { type: "string" },
+                        distinguishing_features: { type: "string" },
+                        accessories: { type: "string" },
+                        clothing_color: { type: "string" },
+                        clothing_type: { type: "string" },
+                        pose: { type: "string" },
+                        description: { type: "string" },
+                      },
                       required: ["description"],
                       additionalProperties: false,
                     },
@@ -95,44 +120,126 @@ Deno.serve(async (req) => {
       const args = JSON.parse(
         data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments ?? '{"faces":[]}'
       );
-      return new Response(JSON.stringify(args), {
+      // Build a single composite description per face (used for matching)
+      const faces = (args.faces ?? []).map((f: Record<string, string>) => ({
+        ...f,
+        description: [
+          f.gender_impression && `${f.gender_impression}`,
+          f.age_range && `age ${f.age_range}`,
+          f.skin_tone && `${f.skin_tone} skin`,
+          f.hair_length && f.hair_color && `${f.hair_length} ${f.hair_color} hair`,
+          f.hair_style && `${f.hair_style}`,
+          f.facial_hair && f.facial_hair !== "none" && `${f.facial_hair}`,
+          f.glasses && f.glasses !== "none" && `${f.glasses}`,
+          f.distinguishing_features && `features: ${f.distinguishing_features}`,
+          f.accessories && `accessories: ${f.accessories}`,
+          f.clothing_color && f.clothing_type && `wearing ${f.clothing_color} ${f.clothing_type}`,
+          f.description && `— ${f.description}`,
+        ]
+          .filter(Boolean)
+          .join(", "),
+      }));
+      return new Response(JSON.stringify({ faces }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     if (body.action === "match") {
-      // Describe the selfie first
+      // 1. Extract structured attributes from the selfie
       const selfie = await callGemini(
+        VISION_MODEL,
         [
           {
             role: "system",
             content:
-              "Describe the single primary face in this selfie with the same attributes a search needs: gender impression, approximate age, skin tone, hair, facial hair, glasses, accessories.",
+              "You extract face attributes from a selfie for visual matching. Be precise and only describe what is clearly visible.",
           },
           {
             role: "user",
             content: [
-              { type: "text", text: "Describe this person briefly." },
+              { type: "text", text: FACE_ATTRIBUTES_PROMPT + " Focus on the primary (largest/closest) face only." },
               { type: "image_url", image_url: { url: body.selfieUrl } },
             ],
           },
-        ]
+        ],
+        [
+          {
+            type: "function",
+            function: {
+              name: "report_faces",
+              description: "Report the primary face in the selfie",
+              parameters: {
+                type: "object",
+                properties: {
+                  faces: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        gender_impression: { type: "string" },
+                        age_range: { type: "string" },
+                        skin_tone: { type: "string" },
+                        hair_color: { type: "string" },
+                        hair_length: { type: "string" },
+                        hair_style: { type: "string" },
+                        facial_hair: { type: "string" },
+                        glasses: { type: "string" },
+                        distinguishing_features: { type: "string" },
+                        description: { type: "string" },
+                      },
+                      required: ["description"],
+                      additionalProperties: false,
+                    },
+                  },
+                },
+                required: ["faces"],
+                additionalProperties: false,
+              },
+            },
+          },
+        ],
+        { type: "function", function: { name: "report_faces" } }
       );
-      const selfieDesc: string = selfie.choices?.[0]?.message?.content ?? "";
+      const selfieArgs = JSON.parse(
+        selfie.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments ?? '{"faces":[]}'
+      );
+      const selfieFace = selfieArgs.faces?.[0] ?? {};
+      const selfieDesc = [
+        selfieFace.gender_impression,
+        selfieFace.age_range && `age ${selfieFace.age_range}`,
+        selfieFace.skin_tone && `${selfieFace.skin_tone} skin`,
+        selfieFace.hair_length && selfieFace.hair_color && `${selfieFace.hair_length} ${selfieFace.hair_color} hair`,
+        selfieFace.hair_style,
+        selfieFace.facial_hair && selfieFace.facial_hair !== "none" && selfieFace.facial_hair,
+        selfieFace.glasses && selfieFace.glasses !== "none" && selfieFace.glasses,
+        selfieFace.distinguishing_features && `features: ${selfieFace.distinguishing_features}`,
+        selfieFace.description,
+      ]
+        .filter(Boolean)
+        .join(", ") || "person";
 
-      // Ask Gemini which candidates match
+      // 2. Ask the model which candidates plausibly contain the same person.
+      // Be INCLUSIVE — clothing changes, lighting changes, partial views are all fine.
+      // Match on stable attributes: gender, age range, skin tone, hair, facial hair, glasses, distinguishing features.
       const match = await callGemini(
+        MATCH_MODEL,
         [
           {
             role: "system",
             content:
-              "You decide which photos contain the same person. Be inclusive but not reckless: include only candidates whose descriptions plausibly match the target person's distinctive features.",
+              "You match a target person against candidate photo descriptions. " +
+              "Each candidate may contain MULTIPLE people — match if ANY described face plausibly matches the target. " +
+              "Match on STABLE attributes (gender, approximate age, skin tone, hair color/length/style, facial hair, glasses, distinguishing features). " +
+              "IGNORE clothing changes, pose differences, and lighting. " +
+              "BE INCLUSIVE: when in doubt, INCLUDE the candidate — clients prefer a few extra photos over missing ones. " +
+              "Only EXCLUDE candidates with clearly conflicting stable attributes (e.g. very different age range, different gender impression, drastically different hair, glasses vs no glasses when both clearly visible).",
           },
           {
             role: "user",
-            content: `Target person: ${selfieDesc}\n\nCandidate photos (JSON):\n${JSON.stringify(
-              body.candidates
-            )}\n\nReturn the IDs of matching candidates.`,
+            content:
+              `Target person attributes: ${selfieDesc}\n\n` +
+              `Candidate photos (JSON list, each candidate's "description" can describe MULTIPLE faces separated by " || "):\n${JSON.stringify(body.candidates)}\n\n` +
+              `Return the IDs of every candidate that could plausibly contain the target person.`,
           },
         ],
         [
@@ -140,7 +247,7 @@ Deno.serve(async (req) => {
             type: "function",
             function: {
               name: "report_matches",
-              description: "Return candidate IDs that match the target person",
+              description: "Return candidate IDs that plausibly match the target person",
               parameters: {
                 type: "object",
                 properties: {

@@ -219,8 +219,9 @@ export default function EventDetail() {
     let fail = 0;
     await pool(targets, 3, async (m) => {
       try {
+        // Use a much larger source image for better face detection accuracy.
         const { data, error } = await supabase.functions.invoke("face-match", {
-          body: { action: "describe", imageUrl: thumbUrl(m.storage_path, 800) },
+          body: { action: "describe", imageUrl: thumbUrl(m.storage_path, 1600) },
         });
         if (error) throw error;
         await supabase
@@ -363,15 +364,20 @@ export default function EventDetail() {
             No media yet — upload your first batch above.
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-            {media.map((m) => (
-              <div key={m.id} className="group relative aspect-square rounded-md overflow-hidden bg-muted">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 md:gap-4">
+            {media.map((m, i) => (
+              <div
+                key={m.id}
+                className="group relative aspect-square rounded-lg overflow-hidden bg-muted shadow-card hover:shadow-glow transition-all duration-500 hover:-translate-y-0.5 animate-fade-up"
+                style={{ animationDelay: `${Math.min(i * 30, 600)}ms` }}
+              >
                 {m.type === "image" ? (
                   <img
-                    src={thumbUrl(m.storage_path, 400)}
+                    src={thumbUrl(m.storage_path, 600)}
                     alt={m.filename}
-                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    className="w-full h-full object-cover transition-transform duration-700 ease-out group-hover:scale-110"
                     loading="lazy"
+                    decoding="async"
                   />
                 ) : (
                   <div className="w-full h-full bg-secondary relative flex items-center justify-center">
@@ -379,9 +385,15 @@ export default function EventDetail() {
                     <Film className="absolute h-8 w-8 text-primary drop-shadow-lg" />
                   </div>
                 )}
+                <div className="absolute inset-0 bg-gradient-to-t from-background/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                {m.type === "image" && m.face_descriptors && m.face_descriptors.length > 0 && (
+                  <div className="absolute bottom-2 left-2 px-1.5 py-0.5 rounded-full glass border border-primary/40 text-[10px] text-primary flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <Sparkles className="h-2.5 w-2.5" /> {m.face_descriptors.length} face{m.face_descriptors.length === 1 ? "" : "s"}
+                  </div>
+                )}
                 <button
                   onClick={() => deleteMedia(m)}
-                  className="absolute top-2 right-2 p-1.5 rounded-full bg-background/80 backdrop-blur opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive hover:text-destructive-foreground"
+                  className="absolute top-2 right-2 p-1.5 rounded-full bg-background/80 backdrop-blur opacity-0 group-hover:opacity-100 transition-all duration-200 hover:bg-destructive hover:text-destructive-foreground hover:scale-110"
                   aria-label="Delete"
                 >
                   <Trash2 className="h-3.5 w-3.5" />

@@ -257,7 +257,7 @@ export default function Gallery() {
         setShowOnlyFavs(false);
         return;
       }
-      const selfieUrl = thumbUrl(path, 600);
+      const selfieUrl = thumbUrl(path, 1200);
       const { data, error } = await supabase.functions.invoke("face-match", {
         body: { action: "match", selfieUrl, candidates },
       });
@@ -342,23 +342,25 @@ export default function Gallery() {
 
   return (
     <div className="min-h-screen">
-      <header className="relative h-[40vh] min-h-[280px] overflow-hidden bg-hero grain">
+      <header className="relative h-[50vh] min-h-[340px] overflow-hidden bg-hero grain">
         {media[0]?.type === "image" && (
           <img
-            src={thumbUrl(media[0].storage_path, 1600)}
+            src={thumbUrl(media[0].storage_path, 1920)}
             alt=""
-            className="absolute inset-0 w-full h-full object-cover opacity-30"
+            className="absolute inset-0 w-full h-full object-cover opacity-40 scale-105 animate-fade-in"
           />
         )}
-        <div className="absolute inset-0 bg-gradient-to-b from-background/40 via-background/60 to-background" />
-        <div className="relative container h-full flex flex-col justify-end pb-8">
-          <div className="flex items-center gap-2 mb-3">
+        <div className="absolute inset-0 bg-gradient-to-b from-background/30 via-background/60 to-background" />
+        <div className="relative container h-full flex flex-col justify-end pb-10 animate-fade-up">
+          <div className="flex items-center gap-2 mb-4">
             <Camera className="h-4 w-4 text-primary" />
-            <span className="font-display text-xl">Lumen</span>
+            <span className="font-display text-xl tracking-wide">Lumen</span>
           </div>
-          <h1 className="font-display text-5xl md:text-7xl tracking-tight">{event.name}</h1>
+          <h1 className="font-display text-5xl md:text-7xl lg:text-8xl tracking-tight leading-[0.95]">
+            {event.name}
+          </h1>
           {event.description && (
-            <p className="text-muted-foreground mt-3 max-w-2xl">{event.description}</p>
+            <p className="text-muted-foreground mt-4 max-w-2xl text-base md:text-lg">{event.description}</p>
           )}
         </div>
       </header>
@@ -412,14 +414,15 @@ export default function Gallery() {
               : "This gallery is empty."}
           </div>
         ) : (
-          <div className="columns-2 md:columns-3 lg:columns-4 gap-3 [column-fill:_balance]">
+          <div className="columns-2 md:columns-3 lg:columns-4 gap-4 [column-fill:_balance]">
             {visible.map((m, i) => (
               <button
                 key={m.id}
                 onClick={() => setLightboxIdx(i)}
-                className="group relative mb-3 block w-full overflow-hidden rounded-md bg-muted break-inside-avoid"
+                className="group relative mb-4 block w-full overflow-hidden rounded-lg bg-muted break-inside-avoid shadow-card hover:shadow-glow transition-all duration-500 hover:-translate-y-1 animate-fade-up"
                 style={{
                   aspectRatio: m.width && m.height ? `${m.width}/${m.height}` : "1/1",
+                  animationDelay: `${Math.min(i * 40, 800)}ms`,
                 }}
               >
                 {m.type === "image" ? (
@@ -427,14 +430,14 @@ export default function Gallery() {
                     <img
                       src={lqipUrl(m.storage_path)}
                       aria-hidden
-                      className="absolute inset-0 w-full h-full object-cover blur-lg scale-110"
+                      className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110"
                     />
                     <img
-                      src={thumbUrl(m.storage_path, 800)}
+                      src={thumbUrl(m.storage_path, 1000)}
                       alt={m.filename}
                       loading="lazy"
                       decoding="async"
-                      className="relative w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 animate-fade-in"
+                      className="relative w-full h-full object-cover transition-transform duration-[900ms] ease-out group-hover:scale-110 animate-fade-in"
                     />
                   </>
                 ) : (
@@ -445,23 +448,27 @@ export default function Gallery() {
                       muted
                       className="w-full h-full object-cover"
                     />
-                    <Film className="absolute h-10 w-10 text-primary drop-shadow-lg" />
+                    <div className="absolute inset-0 flex items-center justify-center bg-background/30">
+                      <div className="p-3 rounded-full glass border border-primary/40 animate-float">
+                        <Film className="h-6 w-6 text-primary" />
+                      </div>
+                    </div>
                   </div>
                 )}
-                <div className="absolute inset-0 bg-cinematic opacity-0 group-hover:opacity-100 transition-opacity" />
-                <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="absolute inset-0 bg-gradient-to-t from-background/80 via-background/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+                <div className="absolute top-2 right-2 flex gap-1 translate-y-1 opacity-0 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300">
                   <span
                     onClick={(e) => {
                       e.stopPropagation();
                       toggleFavorite(m);
                     }}
-                    className="p-2 rounded-full glass border border-border hover:text-primary"
+                    className="p-2 rounded-full glass border border-border hover:text-primary hover:scale-110 transition-transform"
                   >
                     <Heart className={`h-4 w-4 ${favorites.has(m.id) ? "fill-primary text-primary" : ""}`} />
                   </span>
                 </div>
                 {favorites.has(m.id) && (
-                  <div className="absolute top-2 left-2 p-1.5 rounded-full glass border border-primary/40">
+                  <div className="absolute top-2 left-2 p-1.5 rounded-full glass border border-primary/40 animate-fade-in">
                     <Heart className="h-3 w-3 fill-primary text-primary" />
                   </div>
                 )}
@@ -535,20 +542,22 @@ export default function Gallery() {
               <ChevronRight className="h-6 w-6" />
             </button>
           )}
-          <div className="max-w-[92vw] max-h-[90vh] select-none">
+          <div className="max-w-[92vw] max-h-[90vh] select-none animate-scale-in">
             {visible[lightboxIdx].type === "image" ? (
               <img
+                key={visible[lightboxIdx].id}
                 src={publicUrl(visible[lightboxIdx].storage_path)}
                 alt={visible[lightboxIdx].filename}
                 draggable={false}
-                className="max-w-[92vw] max-h-[90vh] object-contain animate-fade-in"
+                className="max-w-[92vw] max-h-[90vh] object-contain animate-fade-in shadow-elegant rounded-md"
               />
             ) : (
               <video
+                key={visible[lightboxIdx].id}
                 src={publicUrl(visible[lightboxIdx].storage_path)}
                 controls
                 autoPlay
-                className="max-w-[92vw] max-h-[90vh]"
+                className="max-w-[92vw] max-h-[90vh] rounded-md shadow-elegant"
               />
             )}
           </div>
