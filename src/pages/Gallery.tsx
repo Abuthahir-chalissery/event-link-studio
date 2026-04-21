@@ -342,23 +342,25 @@ export default function Gallery() {
 
   return (
     <div className="min-h-screen">
-      <header className="relative h-[40vh] min-h-[280px] overflow-hidden bg-hero grain">
+      <header className="relative h-[50vh] min-h-[340px] overflow-hidden bg-hero grain">
         {media[0]?.type === "image" && (
           <img
-            src={thumbUrl(media[0].storage_path, 1600)}
+            src={thumbUrl(media[0].storage_path, 1920)}
             alt=""
-            className="absolute inset-0 w-full h-full object-cover opacity-30"
+            className="absolute inset-0 w-full h-full object-cover opacity-40 scale-105 animate-fade-in"
           />
         )}
-        <div className="absolute inset-0 bg-gradient-to-b from-background/40 via-background/60 to-background" />
-        <div className="relative container h-full flex flex-col justify-end pb-8">
-          <div className="flex items-center gap-2 mb-3">
+        <div className="absolute inset-0 bg-gradient-to-b from-background/30 via-background/60 to-background" />
+        <div className="relative container h-full flex flex-col justify-end pb-10 animate-fade-up">
+          <div className="flex items-center gap-2 mb-4">
             <Camera className="h-4 w-4 text-primary" />
-            <span className="font-display text-xl">Lumen</span>
+            <span className="font-display text-xl tracking-wide">Lumen</span>
           </div>
-          <h1 className="font-display text-5xl md:text-7xl tracking-tight">{event.name}</h1>
+          <h1 className="font-display text-5xl md:text-7xl lg:text-8xl tracking-tight leading-[0.95]">
+            {event.name}
+          </h1>
           {event.description && (
-            <p className="text-muted-foreground mt-3 max-w-2xl">{event.description}</p>
+            <p className="text-muted-foreground mt-4 max-w-2xl text-base md:text-lg">{event.description}</p>
           )}
         </div>
       </header>
