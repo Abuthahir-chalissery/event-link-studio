@@ -219,8 +219,9 @@ export default function EventDetail() {
     let fail = 0;
     await pool(targets, 3, async (m) => {
       try {
+        // Use a much larger source image for better face detection accuracy.
         const { data, error } = await supabase.functions.invoke("face-match", {
-          body: { action: "describe", imageUrl: thumbUrl(m.storage_path, 800) },
+          body: { action: "describe", imageUrl: thumbUrl(m.storage_path, 1600) },
         });
         if (error) throw error;
         await supabase
