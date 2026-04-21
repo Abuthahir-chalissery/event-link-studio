@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -15,10 +15,20 @@ import {
   ChevronRight,
   Film,
   DownloadCloud,
+  Sparkles,
+  User,
+  RotateCcw,
 } from "lucide-react";
 import { publicUrl, thumbUrl, lqipUrl } from "@/lib/media";
 import { getClientToken } from "@/lib/clientToken";
 import JSZip from "jszip";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface EventRow {
   id: string;
@@ -35,6 +45,7 @@ interface MediaRow {
   filename: string;
   width: number | null;
   height: number | null;
+  face_descriptors: { description: string }[] | null;
 }
 
 export default function Gallery() {
@@ -50,7 +61,16 @@ export default function Gallery() {
   const [showOnlyFavs, setShowOnlyFavs] = useState(false);
   const [zipping, setZipping] = useState(false);
 
-  // Load event metadata
+  // Face search state
+  const [faceOpen, setFaceOpen] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [matchedIds, setMatchedIds] = useState<Set<string> | null>(null);
+  const selfieInputRef = useRef<HTMLInputElement>(null);
+
+  // Touch swipe state
+  const touchStartX = useRef<number | null>(null);
+  const touchStartY = useRef<number | null>(null);
+
   useEffect(() => {
     const run = async () => {
       if (!slug) return;
@@ -85,7 +105,7 @@ export default function Gallery() {
     const [{ data: m }, { data: favs }] = await Promise.all([
       supabase
         .from("media")
-        .select("id, storage_path, type, filename, width, height")
+        .select("id, storage_path, type, filename, width, height, face_descriptors")
         .eq("event_id", eventId)
         .order("created_at", { ascending: true }),
       supabase
@@ -94,7 +114,7 @@ export default function Gallery() {
         .eq("event_id", eventId)
         .eq("client_token", getClientToken()),
     ]);
-    setMedia((m ?? []) as MediaRow[]);
+    setMedia((m ?? []) as unknown as MediaRow[]);
     setFavorites(new Set((favs ?? []).map((f) => f.media_id)));
   }, []);
 
@@ -152,18 +172,24 @@ export default function Gallery() {
   };
 
   const downloadAll = async () => {
-    const items = showOnlyFavs ? media.filter((m) => favorites.has(m.id)) : media;
+    const items = visible;
     if (items.length === 0) return;
     setZipping(true);
     try {
       const zip = new JSZip();
-      await Promise.all(
-        items.map(async (m) => {
-          const res = await fetch(publicUrl(m.storage_path));
-          const blob = await res.blob();
-          zip.file(m.filename, blob);
-        })
-      );
+      // Pool downloads to avoid blowing memory
+      const chunks: MediaRow[][] = [];
+      const SIZE = 6;
+      for (let i = 0; i < items.length; i += SIZE) chunks.push(items.slice(i, i + SIZE));
+      for (const chunk of chunks) {
+        await Promise.all(
+          chunk.map(async (m) => {
+            const res = await fetch(publicUrl(m.storage_path));
+            const blob = await res.blob();
+            zip.file(m.filename, blob);
+          })
+        );
+      }
       const out = await zip.generateAsync({ type: "blob" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(out);
@@ -172,6 +198,7 @@ export default function Gallery() {
       URL.revokeObjectURL(a.href);
       toast.success("Download ready");
     } catch (e) {
+      console.error(e);
       toast.error("Failed to zip files");
     } finally {
       setZipping(false);
@@ -183,12 +210,72 @@ export default function Gallery() {
     if (lightboxIdx === null) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setLightboxIdx(null);
-      if (e.key === "ArrowRight") setLightboxIdx((i) => (i === null ? null : Math.min(media.length - 1, i + 1)));
+      if (e.key === "ArrowRight") setLightboxIdx((i) => (i === null ? null : Math.min(visible.length - 1, i + 1)));
       if (e.key === "ArrowLeft") setLightboxIdx((i) => (i === null ? null : Math.max(0, i - 1)));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [lightboxIdx, media.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lightboxIdx, media.length, matchedIds, showOnlyFavs]);
+
+  const onSelfiePicked = async (file: File) => {
+    if (!event) return;
+    const candidates = media
+      .filter((m) => m.type === "image" && m.face_descriptors && m.face_descriptors.length > 0)
+      .map((m) => ({
+        id: m.id,
+        description: (m.face_descriptors ?? []).map((f) => f.description).join(" | "),
+      }));
+    if (candidates.length === 0) {
+      toast.error("Photographer hasn't analyzed faces yet.");
+      return;
+    }
+    setSearching(true);
+    try {
+      // Upload selfie temporarily to a storage path under event so AI can fetch it.
+      const ext = file.name.split(".").pop() || "jpg";
+      const path = `${event.id}/_selfies/${crypto.randomUUID()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("event-media")
+        .upload(path, file, { contentType: file.type, upsert: false });
+      if (upErr) {
+        // Selfies may be blocked by RLS; fall back to data URL
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(r.result as string);
+          r.onerror = reject;
+          r.readAsDataURL(file);
+        });
+        const { data, error } = await supabase.functions.invoke("face-match", {
+          body: { action: "match", selfieUrl: dataUrl, candidates },
+        });
+        if (error) throw error;
+        const ids = new Set<string>(data.matches ?? []);
+        setMatchedIds(ids);
+        toast.success(`Found ${ids.size} matching photo${ids.size === 1 ? "" : "s"}`);
+        setFaceOpen(false);
+        setShowOnlyFavs(false);
+        return;
+      }
+      const selfieUrl = thumbUrl(path, 600);
+      const { data, error } = await supabase.functions.invoke("face-match", {
+        body: { action: "match", selfieUrl, candidates },
+      });
+      // Best-effort cleanup
+      await supabase.storage.from("event-media").remove([path]);
+      if (error) throw error;
+      const ids = new Set<string>(data.matches ?? []);
+      setMatchedIds(ids);
+      toast.success(`Found ${ids.size} matching photo${ids.size === 1 ? "" : "s"}`);
+      setFaceOpen(false);
+      setShowOnlyFavs(false);
+    } catch (e) {
+      console.error(e);
+      toast.error(e instanceof Error ? e.message : "Face search failed");
+    } finally {
+      setSearching(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -248,11 +335,13 @@ export default function Gallery() {
     );
   }
 
-  const visible = showOnlyFavs ? media.filter((m) => favorites.has(m.id)) : media;
+  let visible = matchedIds ? media.filter((m) => matchedIds.has(m.id)) : media;
+  if (showOnlyFavs) visible = visible.filter((m) => favorites.has(m.id));
+
+  const hasAnalyzedFaces = media.some((m) => m.face_descriptors && m.face_descriptors.length > 0);
 
   return (
     <div className="min-h-screen">
-      {/* Hero header */}
       <header className="relative h-[40vh] min-h-[280px] overflow-hidden bg-hero grain">
         {media[0]?.type === "image" && (
           <img
@@ -274,14 +363,27 @@ export default function Gallery() {
         </div>
       </header>
 
-      {/* Toolbar */}
       <div className="sticky top-0 z-20 glass border-b border-border">
-        <div className="container flex items-center justify-between py-3 gap-3">
+        <div className="container flex items-center justify-between py-3 gap-3 flex-wrap">
           <div className="text-sm text-muted-foreground">
             {visible.length} {visible.length === 1 ? "item" : "items"}
+            {matchedIds && " · my photos"}
             {showOnlyFavs && " · favorites"}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {hasAnalyzedFaces && (
+              matchedIds ? (
+                <Button variant="ghost" size="sm" onClick={() => setMatchedIds(null)}>
+                  <RotateCcw className="h-4 w-4 mr-1.5" />
+                  Show all
+                </Button>
+              ) : (
+                <Button variant="outline" size="sm" onClick={() => setFaceOpen(true)}>
+                  <Sparkles className="h-4 w-4 mr-1.5" />
+                  Find my photos
+                </Button>
+              )
+            )}
             <Button
               variant={showOnlyFavs ? "default" : "ghost"}
               size="sm"
@@ -303,7 +405,11 @@ export default function Gallery() {
       <main className="container py-8">
         {visible.length === 0 ? (
           <div className="text-center py-20 text-muted-foreground">
-            {showOnlyFavs ? "No favorites yet." : "This gallery is empty."}
+            {matchedIds
+              ? "No matching photos found."
+              : showOnlyFavs
+              ? "No favorites yet."
+              : "This gallery is empty."}
           </div>
         ) : (
           <div className="columns-2 md:columns-3 lg:columns-4 gap-3 [column-fill:_balance]">
@@ -367,7 +473,23 @@ export default function Gallery() {
 
       {/* Lightbox */}
       {lightboxIdx !== null && visible[lightboxIdx] && (
-        <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-md flex items-center justify-center animate-fade-in">
+        <div
+          className="fixed inset-0 z-50 bg-background/95 backdrop-blur-md flex items-center justify-center animate-fade-in touch-pan-y"
+          onTouchStart={(e) => {
+            touchStartX.current = e.touches[0].clientX;
+            touchStartY.current = e.touches[0].clientY;
+          }}
+          onTouchEnd={(e) => {
+            if (touchStartX.current === null || touchStartY.current === null) return;
+            const dx = e.changedTouches[0].clientX - touchStartX.current;
+            const dy = e.changedTouches[0].clientY - touchStartY.current;
+            touchStartX.current = null;
+            touchStartY.current = null;
+            if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy)) return;
+            if (dx < 0 && lightboxIdx < visible.length - 1) setLightboxIdx(lightboxIdx + 1);
+            else if (dx > 0 && lightboxIdx > 0) setLightboxIdx(lightboxIdx - 1);
+          }}
+        >
           <button
             onClick={() => setLightboxIdx(null)}
             className="absolute top-4 right-4 p-2 rounded-full glass border border-border hover:text-primary z-10"
@@ -398,7 +520,7 @@ export default function Gallery() {
           {lightboxIdx > 0 && (
             <button
               onClick={() => setLightboxIdx(lightboxIdx - 1)}
-              className="absolute left-4 p-2 rounded-full glass border border-border hover:text-primary"
+              className="absolute left-4 p-2 rounded-full glass border border-border hover:text-primary hidden md:block"
               aria-label="Previous"
             >
               <ChevronLeft className="h-6 w-6" />
@@ -407,17 +529,18 @@ export default function Gallery() {
           {lightboxIdx < visible.length - 1 && (
             <button
               onClick={() => setLightboxIdx(lightboxIdx + 1)}
-              className="absolute right-4 p-2 rounded-full glass border border-border hover:text-primary"
+              className="absolute right-4 p-2 rounded-full glass border border-border hover:text-primary hidden md:block"
               aria-label="Next"
             >
               <ChevronRight className="h-6 w-6" />
             </button>
           )}
-          <div className="max-w-[92vw] max-h-[90vh]">
+          <div className="max-w-[92vw] max-h-[90vh] select-none">
             {visible[lightboxIdx].type === "image" ? (
               <img
                 src={publicUrl(visible[lightboxIdx].storage_path)}
                 alt={visible[lightboxIdx].filename}
+                draggable={false}
                 className="max-w-[92vw] max-h-[90vh] object-contain animate-fade-in"
               />
             ) : (
@@ -429,8 +552,47 @@ export default function Gallery() {
               />
             )}
           </div>
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-xs text-muted-foreground">
+            {lightboxIdx + 1} / {visible.length}
+          </div>
         </div>
       )}
+
+      {/* Face search dialog */}
+      <Dialog open={faceOpen} onOpenChange={setFaceOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="font-display text-3xl">Find your photos</DialogTitle>
+            <DialogDescription>
+              Upload a clear selfie. We'll use AI to surface the photos you appear in.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <input
+              ref={selfieInputRef}
+              type="file"
+              accept="image/*"
+              capture="user"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) onSelfiePicked(f);
+              }}
+            />
+            <Button
+              className="w-full h-12"
+              disabled={searching}
+              onClick={() => selfieInputRef.current?.click()}
+            >
+              <User className="h-4 w-4 mr-2" />
+              {searching ? "Searching…" : "Choose a selfie"}
+            </Button>
+            <p className="text-xs text-muted-foreground text-center">
+              Your selfie is used only for this search and is not stored.
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <footer className="border-t border-border py-8 text-center text-xs text-muted-foreground">
         Delivered with <span className="text-primary">Lumen</span>
