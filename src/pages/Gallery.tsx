@@ -257,7 +257,7 @@ export default function Gallery() {
         setShowOnlyFavs(false);
         return;
       }
-      const selfieUrl = thumbUrl(path, 600);
+      const selfieUrl = thumbUrl(path, 1200);
       const { data, error } = await supabase.functions.invoke("face-match", {
         body: { action: "match", selfieUrl, candidates },
       });
